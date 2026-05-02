@@ -41,3 +41,10 @@ live-audit-results/
 real_exploits/
 kani_proofs/
 production_audit_results/
+
+# Solana keypair files — NEVER commit private keys to source control.
+# If a keypair was already committed, rotate it immediately and purge
+# it from git history using: git filter-repo --path <file> --invert-paths
+*-keypair.json
+*.json.key
+deploy-keypair.json
