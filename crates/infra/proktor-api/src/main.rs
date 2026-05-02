@@ -36,6 +36,8 @@ pub struct AppState {
     /// Background scan worker
     pub scan_worker: worker::ScanWorker,
     /// API key for authenticated endpoints (from environment).
+    /// None means auth is disabled — only acceptable in local dev with no
+    /// external network access. The server logs a loud warning at startup.
     pub api_key: Option<String>,
 }
 
@@ -74,7 +76,8 @@ impl ApiConfig {
 // ─── Auth Middleware ────────────────────────────────────────────────────────
 
 pub fn authenticate(req: &HttpRequest, state: &AppState) -> Result<(), HttpResponse> {
-    // If no API key configured, all requests are allowed (dev mode)
+    // If no API key is configured, all requests are allowed.
+    // This is intentional for local dev but the server warns loudly at startup.
     let required_key = match &state.api_key {
         Some(key) => key,
         None => return Ok(()),
@@ -83,14 +86,19 @@ pub fn authenticate(req: &HttpRequest, state: &AppState) -> Result<(), HttpRespo
     let provided_key = req
         .headers()
         .get("X-API-Key")
-        .and_then(|v| v.to_str().ok());
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
 
-    match provided_key {
-        Some(key) if key == required_key => Ok(()),
-        _ => Err(HttpResponse::Unauthorized().json(serde_json::json!({
+    // Use constant-time comparison to prevent timing side-channel attacks.
+    // A naive `==` on strings leaks information about shared prefix length
+    // through measurable timing differences across many requests.
+    if constant_time_eq::constant_time_eq(provided_key.as_bytes(), required_key.as_bytes()) {
+        Ok(())
+    } else {
+        Err(HttpResponse::Unauthorized().json(serde_json::json!({
             "error": "Invalid or missing API key",
             "hint": "Set the X-API-Key header"
-        }))),
+        })))
     }
 }
 
@@ -100,7 +108,7 @@ pub fn authenticate(req: &HttpRequest, state: &AppState) -> Result<(), HttpRespo
 async fn main() -> std::io::Result<()> {
     // ─── Enterprise Observability: Structured JSON Logging ───
     let is_json = std::env::var("LOG_FORMAT").unwrap_or_default() == "json";
-    
+
     if is_json {
         tracing_subscriber::fmt()
             .json()
@@ -125,6 +133,16 @@ async fn main() -> std::io::Result<()> {
     info!("RPC URL: {}", config.rpc_url);
     info!("Oracle Program: {}", config.oracle_program_id);
     info!("Binding to {}:{}", config.host, config.port);
+
+    // Warn loudly if the API key is not set. This is not an error in dev, but
+    // it must never reach production without a key configured.
+    if config.api_key.is_none() {
+        warn!(
+            "SECURITY WARNING: PROKTOR_API_KEY is not set. \
+             All incoming requests will be accepted without authentication. \
+             Set PROKTOR_API_KEY before exposing this server to any network."
+        );
+    }
 
     let rpc_client = Arc::new(RpcClient::new(config.rpc_url.clone()));
     let oracle_program_id = match Pubkey::from_str(&config.oracle_program_id) {
