@@ -36,6 +36,11 @@ borsh = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
 
+# Security
+# constant_time_eq: prevents timing side-channel attacks on API key comparison.
+# A naive string == leaks information about key length/prefix through timing.
+constant_time_eq = "0.3"
+
 # Utilities
 anyhow = { workspace = true }
 chrono = { workspace = true }
